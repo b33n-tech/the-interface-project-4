@@ -5,17 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Data Sculptor</title>
 
-<!-- UI / libs -->
 <script src="https://cdn.tailwindcss.com"></script>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-<!-- Data -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
-<!-- Word export -->
 <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
 </head>
 
@@ -26,43 +22,35 @@
 const { useState, useRef, useEffect } = React;
 
 /* ---------- Icons ---------- */
-const Upload = () => <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>;
-const Trash2 = () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>;
-const Edit3 = () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>;
-const Plus = () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
-const Save = () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 0 1-2-2V5h11l5 5z"/></svg>;
-const FolderOpen = () => <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19H4V5h5l2 3h11z"/></svg>;
+const Upload = () => <span>⬆️</span>;
+const Trash2 = () => <span>🗑️</span>;
+const Edit3 = () => <span>✏️</span>;
+const Plus = () => <span>➕</span>;
 
-/* ---------- Chart Block ---------- */
+/* ---------- Chart ---------- */
 const ChartBlock = ({ data }) => {
     const ref = useRef(null);
 
     useEffect(() => {
         if (!ref.current) return;
         const ctx = ref.current.getContext("2d");
-        let chart;
 
-        if (data.chart === "bar" || data.chart === "pie") {
-            chart = new Chart(ctx, {
-                type: data.chart,
-                data: {
-                    labels: data.value.map(v => v[0]),
-                    datasets: [{
-                        data: data.value.map(v => v[1]),
-                        backgroundColor: [
-                            "#3B82F6","#F97316","#10B981",
-                            "#EF4444","#8B5CF6","#F59E0B"
-                        ]
-                    }]
-                },
-                options: { responsive: true, plugins:{ legend:{ display:false }} }
-            });
-        }
+        const chart = new Chart(ctx, {
+            type: data.chart,
+            data: {
+                labels: data.value.map(v => v[0]),
+                datasets: [{
+                    data: data.value.map(v => v[1]),
+                    backgroundColor: ["#3B82F6","#F97316","#10B981","#EF4444","#8B5CF6"]
+                }]
+            },
+            options:{ responsive:true, plugins:{ legend:{ display:false }}}
+        });
 
-        return () => chart && chart.destroy();
+        return () => chart.destroy();
     }, [data]);
 
-    return <canvas ref={ref} height="160"></canvas>;
+    return <canvas ref={ref} height="150"></canvas>;
 };
 
 /* ---------- App ---------- */
@@ -71,6 +59,7 @@ const DataSculptor = () => {
     const [columns, setColumns] = useState([]);
     const [blocks, setBlocks] = useState([]);
     const [activeBlockId, setActiveBlockId] = useState(null);
+    const [draggedId, setDraggedId] = useState(null);
 
     const fileInput = useRef(null);
 
@@ -80,27 +69,27 @@ const DataSculptor = () => {
         return () => window.removeEventListener("click", close);
     }, []);
 
-    const calculateKPI = (b, rows = data) => {
-        if (b.operation === "count") return rows.length;
-        const values = rows.map(r => r[b.column]).filter(v => v !== "" && v != null);
+    /* ---------- KPI ---------- */
+    const calculateKPI = (b) => {
+        if (b.operation === "count") return data.length;
+        const values = data.map(r => r[b.column]).filter(v => v != null && v !== "");
 
         if (b.type === "number") {
             const nums = values.map(Number).filter(n => !isNaN(n));
             if (!nums.length) return 0;
             if (b.operation === "sum") return nums.reduce((a,b)=>a+b,0).toFixed(2);
             if (b.operation === "avg") return (nums.reduce((a,b)=>a+b,0)/nums.length).toFixed(2);
-            if (b.operation === "max") return Math.max(...nums).toFixed(2);
-            if (b.operation === "min") return Math.min(...nums).toFixed(2);
         }
 
         if (b.type === "list") {
             const counts = {};
             values.forEach(v => counts[v] = (counts[v]||0)+1);
-            return Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,10);
+            return Object.entries(counts).slice(0,10);
         }
         return 0;
     };
 
+    /* ---------- Upload ---------- */
     const handleFileUpload = e => {
         const f = e.target.files[0];
         if (!f) return;
@@ -109,88 +98,83 @@ const DataSculptor = () => {
         reader.onload = ev => {
             const wb = XLSX.read(new Uint8Array(ev.target.result), {type:"array"});
             const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-            const cols = Object.keys(json[0] || {});
-            setColumns(cols);
             setData(json);
-
-            setBlocks([
-                { id:0, title:"Nombre de lignes", type:"number", operation:"count", value:json.length },
-                ...(cols.map((c,i)=>({
-                    id:i+1,
-                    title:`Total ${c}`,
-                    type:"number",
-                    column:c,
-                    operation:"sum",
-                    value:calculateKPI({type:"number",column:c,operation:"sum"},json)
-                })))
-            ]);
+            setColumns(Object.keys(json[0] || {}));
         };
         reader.readAsArrayBuffer(f);
     };
 
-    /* ---------- Word export ---------- */
-    const handleExportWord = async () => {
-        const { Document, Packer, Paragraph, HeadingLevel, TextRun } = window.docx;
-        const children = [];
+    /* ---------- Add block ---------- */
+    const handleAddBlock = () => {
+        const newBlock = {
+            id: Date.now(),
+            title: "Nouvelle data",
+            type: "number",
+            operation: "count",
+            value: data.length
+        };
+        setBlocks([...blocks, newBlock]);
+    };
 
-        children.push(new Paragraph({ text:"Data Sculptor – KPIs", heading:HeadingLevel.TITLE }));
-        children.push(new Paragraph({ text:`Exporté le ${new Date().toLocaleString()}` }));
+    /* ---------- Drag & drop ---------- */
+    const onDrop = (targetId) => {
+        const srcIndex = blocks.findIndex(b => b.id === draggedId);
+        const tgtIndex = blocks.findIndex(b => b.id === targetId);
+        if (srcIndex === -1 || tgtIndex === -1) return;
+
+        const updated = [...blocks];
+        const [moved] = updated.splice(srcIndex, 1);
+        updated.splice(tgtIndex, 0, moved);
+        setBlocks(updated);
+    };
+
+    /* ---------- Export Word ---------- */
+    const handleExportWord = async () => {
+        const { Document, Packer, Paragraph, HeadingLevel } = window.docx;
+        const children = [
+            new Paragraph({ text:"Data Sculptor – KPIs", heading:HeadingLevel.TITLE })
+        ];
 
         blocks.forEach(b => {
             children.push(new Paragraph({ text:b.title, heading:HeadingLevel.HEADING_2 }));
-
-            if (b.type === "number") {
-                children.push(new Paragraph({
-                    children:[ new TextRun({ text:String(b.value), bold:true }) ]
-                }));
-            }
-
-            if (b.type === "list") {
-                b.value.forEach(([l,v]) =>
-                    children.push(new Paragraph({ text:`• ${l} : ${v}` }))
-                );
-            }
+            children.push(new Paragraph({ text:String(b.value) }));
         });
 
         const doc = new Document({ sections:[{ children }] });
         const blob = await Packer.toBlob(doc);
-
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = "data-sculptor-kpis.docx";
+        a.download = "kpis.docx";
         a.click();
     };
 
-    /* ---------- Render block ---------- */
+    /* ---------- Block ---------- */
     const renderBlock = b => {
         const active = activeBlockId === b.id;
 
         return (
             <div
                 key={b.id}
+                draggable
+                onDragStart={() => setDraggedId(b.id)}
+                onDragOver={e => e.preventDefault()}
+                onDrop={() => onDrop(b.id)}
                 onClick={() => setActiveBlockId(b.id)}
                 onContextMenu={e => { e.preventDefault(); setActiveBlockId(b.id); }}
-                className={`relative bg-white p-6 rounded-lg border cursor-pointer transition
+                className={`relative bg-white p-6 rounded-lg border cursor-move transition
                     ${active ? "ring-2 ring-blue-400 shadow-lg" : "hover:shadow-md"}`}
             >
                 {active && (
-                    <div className="absolute inset-0 bg-white/70 backdrop-blur-sm flex items-center justify-center gap-4 z-10 rounded-lg">
-                        <button className="px-4 py-2 bg-blue-500 text-white rounded-lg flex gap-2">
-                            <Edit3/> Modifier
-                        </button>
-                        <button
-                            onClick={e => { e.stopPropagation(); setBlocks(blocks.filter(x=>x.id!==b.id)); }}
-                            className="px-4 py-2 bg-red-500 text-white rounded-lg flex gap-2"
-                        >
-                            <Trash2/> Supprimer
-                        </button>
+                    <div className="absolute inset-0 bg-white/70 flex items-center justify-center gap-4 z-10">
+                        <button className="bg-blue-500 text-white px-3 py-2 rounded-lg"><Edit3/> Modifier</button>
+                        <button onClick={()=>setBlocks(blocks.filter(x=>x.id!==b.id))}
+                            className="bg-red-500 text-white px-3 py-2 rounded-lg"><Trash2/> Supprimer</button>
                     </div>
                 )}
 
                 <div className={active ? "opacity-30" : ""}>
                     <div className="text-sm text-gray-500 mb-2">{b.title}</div>
-                    {b.type === "number" && <div className="text-3xl font-bold">{b.value}</div>}
-                    {b.type === "list" && b.chart && <ChartBlock data={b}/>}
+                    <div className="text-3xl font-bold">{b.value}</div>
                 </div>
             </div>
         );
@@ -201,12 +185,15 @@ const DataSculptor = () => {
             <h1 className="text-3xl font-bold mb-4">Data Sculptor</h1>
 
             <div className="flex gap-3 mb-6">
-                <button onClick={()=>fileInput.current.click()} className="bg-blue-500 text-white px-4 py-2 rounded-lg flex gap-2">
+                <button onClick={()=>fileInput.current.click()} className="bg-blue-500 text-white px-4 py-2 rounded-lg">
                     <Upload/> Upload fichier
                 </button>
-                <input ref={fileInput} type="file" hidden accept=".xlsx,.csv" onChange={handleFileUpload}/>
+                <input ref={fileInput} type="file" hidden onChange={handleFileUpload}/>
+                <button onClick={handleAddBlock} className="bg-indigo-500 text-white px-4 py-2 rounded-lg">
+                    <Plus/> Ajouter une data
+                </button>
                 <button onClick={handleExportWord} className="bg-gray-900 text-white px-4 py-2 rounded-lg">
-                    📄 Télécharger Word
+                    📄 Word
                 </button>
             </div>
 
