@@ -74,6 +74,8 @@ const DataSculptor = () => {
     const [blocks, setBlocks] = useState([]);
     const [activeId, setActiveId] = useState(null);
     const [draggedId, setDraggedId] = useState(null);
+    const [editingId, setEditingId] = useState(null);
+    const [editForm, setEditForm] = useState({});
 
     const fileInput = useRef(null);
 
@@ -81,8 +83,9 @@ const DataSculptor = () => {
     useEffect(() => {
         const close = (e) => {
             // Ne fermer que si le clic est en dehors d'un block
-            if (!e.target.closest('.block-container')) {
+            if (!e.target.closest('.block-container') && !e.target.closest('.edit-modal')) {
                 setActiveId(null);
+                setEditingId(null);
             }
         };
         window.addEventListener("click", close);
@@ -208,6 +211,33 @@ const DataSculptor = () => {
         setDraggedId(null);
     };
 
+    /* ================= Edit Block ================= */
+    const handleEditBlock = (block) => {
+        setEditForm({
+            id: block.id,
+            title: block.title,
+            type: block.type,
+            column: block.column || columns[0],
+            operation: block.operation,
+            chart: block.chart || ""
+        });
+        setEditingId(block.id);
+        setActiveId(null);
+    };
+
+    const handleSaveEdit = () => {
+        setBlocks(prev => prev.map(b => 
+            b.id === editForm.id ? { ...editForm } : b
+        ));
+        setEditingId(null);
+        setEditForm({});
+    };
+
+    const handleCancelEdit = () => {
+        setEditingId(null);
+        setEditForm({});
+    };
+
     /* ================= Export Word ================= */
     const handleExportWord = async () => {
         if (!blocks.length) {
@@ -289,8 +319,7 @@ const DataSculptor = () => {
                             className="bg-blue-500 text-white px-4 py-2 rounded-lg flex gap-2"
                             onClick={(e) => {
                                 e.stopPropagation();
-                                // Fonctionnalité de modification à implémenter
-                                alert("Fonctionnalité de modification à venir");
+                                handleEditBlock(b);
                             }}
                         >
                             <Edit/> Modifier
@@ -340,6 +369,107 @@ const DataSculptor = () => {
     return (
         <div className="p-8 max-w-7xl mx-auto">
             <h1 className="text-3xl font-bold mb-4">Data Sculptor</h1>
+
+            {/* Edit Modal */}
+            {editingId && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div 
+                        className="edit-modal bg-white rounded-lg p-6 max-w-md w-full mx-4"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h2 className="text-xl font-bold mb-4">Modifier le module</h2>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Titre</label>
+                                <input
+                                    type="text"
+                                    value={editForm.title}
+                                    onChange={(e) => setEditForm({...editForm, title: e.target.value})}
+                                    className="w-full border rounded px-3 py-2"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Type</label>
+                                <select
+                                    value={editForm.type}
+                                    onChange={(e) => setEditForm({...editForm, type: e.target.value})}
+                                    className="w-full border rounded px-3 py-2"
+                                >
+                                    <option value="number">Nombre</option>
+                                    <option value="list">Liste</option>
+                                </select>
+                            </div>
+
+                            {editForm.operation !== "count" && (
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Colonne</label>
+                                    <select
+                                        value={editForm.column}
+                                        onChange={(e) => setEditForm({...editForm, column: e.target.value})}
+                                        className="w-full border rounded px-3 py-2"
+                                    >
+                                        {columns.map(col => (
+                                            <option key={col} value={col}>{col}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Opération</label>
+                                <select
+                                    value={editForm.operation}
+                                    onChange={(e) => setEditForm({...editForm, operation: e.target.value})}
+                                    className="w-full border rounded px-3 py-2"
+                                >
+                                    <option value="count">Compter</option>
+                                    {editForm.type === "number" && (
+                                        <>
+                                            <option value="sum">Somme</option>
+                                            <option value="avg">Moyenne</option>
+                                            <option value="max">Maximum</option>
+                                            <option value="min">Minimum</option>
+                                        </>
+                                    )}
+                                </select>
+                            </div>
+
+                            {editForm.type === "list" && (
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Graphique</label>
+                                    <select
+                                        value={editForm.chart}
+                                        onChange={(e) => setEditForm({...editForm, chart: e.target.value})}
+                                        className="w-full border rounded px-3 py-2"
+                                    >
+                                        <option value="">Aucun</option>
+                                        <option value="bar">Barres</option>
+                                        <option value="pie">Camembert</option>
+                                        <option value="doughnut">Donut</option>
+                                    </select>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex gap-3 mt-6">
+                            <button
+                                onClick={handleSaveEdit}
+                                className="flex-1 bg-blue-500 text-white px-4 py-2 rounded-lg"
+                            >
+                                Enregistrer
+                            </button>
+                            <button
+                                onClick={handleCancelEdit}
+                                className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-lg"
+                            >
+                                Annuler
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <div className="flex gap-3 mb-6">
                 <button
