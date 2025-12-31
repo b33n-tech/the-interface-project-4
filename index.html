@@ -9,7 +9,6 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
@@ -28,29 +27,29 @@ const Trash = () => <span>🗑️</span>;
 const Edit = () => <span>✏️</span>;
 
 /* ================= Chart ================= */
-const ChartBlock = ({ value, chart }) => {
+const ChartBlock = ({ labels, values, chart }) => {
     const ref = useRef(null);
-    const chartInstance = useRef(null);
+    const instance = useRef(null);
 
     useEffect(() => {
-        if (!ref.current || !chart || !value || value.length === 0) return;
+        if (!ref.current || !labels || !values || labels.length === 0) return;
         
-        // Détruire l'instance précédente si elle existe
-        if (chartInstance.current) {
-            chartInstance.current.destroy();
+        // Détruire l'instance précédente
+        if (instance.current) {
+            instance.current.destroy();
+            instance.current = null;
         }
 
         const ctx = ref.current.getContext("2d");
 
-        chartInstance.current = new Chart(ctx, {
+        instance.current = new Chart(ctx, {
             type: chart,
             data: {
-                labels: value.map(v => v[0]),
+                labels,
                 datasets: [{
-                    data: value.map(v => v[1]),
+                    data: values,
                     backgroundColor: [
-                        "#3B82F6","#F97316","#10B981",
-                        "#EF4444","#8B5CF6","#F59E0B"
+                        "#3B82F6","#F97316","#10B981","#EF4444","#8B5CF6","#F59E0B"
                     ]
                 }]
             },
@@ -58,11 +57,12 @@ const ChartBlock = ({ value, chart }) => {
         });
 
         return () => {
-            if (chartInstance.current) {
-                chartInstance.current.destroy();
+            if (instance.current) {
+                instance.current.destroy();
+                instance.current = null;
             }
         };
-    }, [value, chart]);
+    }, [labels, values, chart]);
 
     return <canvas ref={ref} height="160"></canvas>;
 };
@@ -73,53 +73,22 @@ const DataSculptor = () => {
     const [columns, setColumns] = useState([]);
     const [blocks, setBlocks] = useState([]);
     const [activeId, setActiveId] = useState(null);
-    const [draggedId, setDraggedId] = useState(null);
     const [editingId, setEditingId] = useState(null);
     const [editForm, setEditForm] = useState({});
-
+    const [draggedId, setDraggedId] = useState(null);
     const fileInput = useRef(null);
 
-    /* -------- Close overlay on outside click -------- */
+    /* -------- Fermer l'overlay au clic extérieur -------- */
     useEffect(() => {
-        const close = (e) => {
-            // Ne fermer que si le clic est en dehors d'un block
+        const handleClickOutside = (e) => {
+            // Ne fermer que si le clic est en dehors d'un bloc et de la modale
             if (!e.target.closest('.block-container') && !e.target.closest('.edit-modal')) {
                 setActiveId(null);
-                setEditingId(null);
             }
         };
-        window.addEventListener("click", close);
-        return () => window.removeEventListener("click", close);
+        document.addEventListener("click", handleClickOutside);
+        return () => document.removeEventListener("click", handleClickOutside);
     }, []);
-
-    /* ================= KPI CALC ================= */
-    const calculateKPI = (block) => {
-        if (!data.length) return block.type === "list" ? [] : 0;
-
-        if (block.operation === "count") return data.length;
-
-        const values = data
-            .map(r => r[block.column])
-            .filter(v => v !== null && v !== undefined && v !== "");
-
-        if (block.type === "number") {
-            const nums = values.map(Number).filter(n => !isNaN(n));
-            if (!nums.length) return 0;
-
-            if (block.operation === "sum") return nums.reduce((a,b)=>a+b,0).toFixed(2);
-            if (block.operation === "avg") return (nums.reduce((a,b)=>a+b,0)/nums.length).toFixed(2);
-            if (block.operation === "max") return Math.max(...nums).toFixed(2);
-            if (block.operation === "min") return Math.min(...nums).toFixed(2);
-        }
-
-        if (block.type === "list") {
-            const counts = {};
-            values.forEach(v => counts[v] = (counts[v] || 0) + 1);
-            return Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,10);
-        }
-
-        return 0;
-    };
 
     /* ================= Upload ================= */
     const handleFileUpload = e => {
@@ -135,21 +104,11 @@ const DataSculptor = () => {
                     alert("Le fichier ne contient pas de données");
                     return;
                 }
-
                 setData(json);
                 setColumns(Object.keys(json[0]));
-
-                // KPIs de base
-                setBlocks([
-                    {
-                        id: Date.now(),
-                        title: "Nombre de lignes",
-                        type: "number",
-                        operation: "count"
-                    }
-                ]);
-            } catch (error) {
-                console.error("Erreur lors de la lecture du fichier:", error);
+                setBlocks([]);
+            } catch (err) {
+                console.error("Erreur lecture fichier:", err);
                 alert("Erreur lors de la lecture du fichier");
             }
         };
@@ -157,28 +116,73 @@ const DataSculptor = () => {
             alert("Erreur lors de la lecture du fichier");
         };
         reader.readAsArrayBuffer(file);
-        
-        // Réinitialiser l'input pour permettre de charger le même fichier
         e.target.value = '';
     };
 
+    /* ================= Compute Block ================= */
+    const computeBlock = b => {
+        if (!data.length) return null;
+
+        if (b.type === "number") {
+            if (b.operation === "count") return data.length;
+            
+            if (!b.column) return 0;
+            
+            const nums = data
+                .map(r => Number(r[b.column]))
+                .filter(n => !isNaN(n) && n !== null && n !== undefined);
+            
+            if (!nums.length) return 0;
+            
+            if (b.operation === "sum") return nums.reduce((a,b)=>a+b,0).toFixed(2);
+            if (b.operation === "avg") return (nums.reduce((a,b)=>a+b,0)/nums.length).toFixed(2);
+            if (b.operation === "max") return Math.max(...nums).toFixed(2);
+            if (b.operation === "min") return Math.min(...nums).toFixed(2);
+        }
+
+        if (b.type === "chart") {
+            if (!b.group || !b.value) return { labels: [], values: [] };
+            
+            const groups = {};
+            data.forEach(r => {
+                const k = r[b.group];
+                if (k === null || k === undefined) return;
+                const v = Number(r[b.value]) || 0;
+                groups[k] = (groups[k] || 0) + v;
+            });
+            return { labels: Object.keys(groups), values: Object.values(groups) };
+        }
+
+        if (b.type === "pivot") {
+            if (!b.row || !b.col) return {};
+            
+            const pivot = {};
+            data.forEach(r => {
+                const rowVal = r[b.row];
+                const colVal = r[b.col];
+                if (rowVal === null || rowVal === undefined || colVal === null || colVal === undefined) return;
+                
+                pivot[rowVal] = pivot[rowVal] || {};
+                pivot[rowVal][colVal] = (pivot[rowVal][colVal] || 0) + 1;
+            });
+            return pivot;
+        }
+
+        return null;
+    };
+
     /* ================= Add Block ================= */
-    const handleAddBlock = () => {
+    const addBlock = (type) => {
         if (!columns.length) {
             alert("Veuillez d'abord charger un fichier");
             return;
         }
 
-        setBlocks(prev => [
-            ...prev,
-            {
-                id: Date.now(),
-                title: "Nouvelle data",
-                type: "number",
-                column: columns[0],
-                operation: "sum"
-            }
-        ]);
+        const base = { id: Date.now(), title:"Nouveau bloc", type };
+        if (type === "number") Object.assign(base,{ column:columns[0], operation:"sum" });
+        if (type === "chart") Object.assign(base,{ group:columns[0], value:columns[1] || columns[0], chart:"bar" });
+        if (type === "pivot") Object.assign(base,{ row:columns[0], col:columns[1] || columns[0] });
+        setBlocks(b => [...b, base]);
     };
 
     /* ================= Drag & Drop ================= */
@@ -186,49 +190,39 @@ const DataSculptor = () => {
         setDraggedId(id);
         e.dataTransfer.effectAllowed = "move";
     };
-
-    const onDragOver = (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
+    
+    const onDragOver = e => { 
+        e.preventDefault(); 
+        e.dataTransfer.dropEffect="move"; 
     };
-
+    
     const onDrop = (e, targetId) => {
         e.preventDefault();
-        if (draggedId === targetId) return;
+        if (draggedId === targetId || !draggedId) return;
         
-        const from = blocks.findIndex(b => b.id === draggedId);
-        const to = blocks.findIndex(b => b.id === targetId);
-        if (from === -1 || to === -1) return;
-
-        const updated = [...blocks];
-        const [moved] = updated.splice(from, 1);
-        updated.splice(to, 0, moved);
+        const from = blocks.findIndex(b=>b.id===draggedId);
+        const to = blocks.findIndex(b=>b.id===targetId);
+        if (from===-1 || to===-1) return;
+        
+        const updated=[...blocks];
+        const [moved]=updated.splice(from,1);
+        updated.splice(to,0,moved);
         setBlocks(updated);
         setDraggedId(null);
     };
-
-    const onDragEnd = () => {
-        setDraggedId(null);
-    };
+    
+    const onDragEnd = () => setDraggedId(null);
 
     /* ================= Edit Block ================= */
-    const handleEditBlock = (block) => {
-        setEditForm({
-            id: block.id,
-            title: block.title,
-            type: block.type,
-            column: block.column || columns[0],
-            operation: block.operation,
-            chart: block.chart || ""
-        });
+    const handleEditClick = (e, block) => {
+        e.stopPropagation();
         setEditingId(block.id);
+        setEditForm({...block});
         setActiveId(null);
     };
 
     const handleSaveEdit = () => {
-        setBlocks(prev => prev.map(b => 
-            b.id === editForm.id ? { ...editForm } : b
-        ));
+        setBlocks(blocks.map(x => x.id === editForm.id ? editForm : x));
         setEditingId(null);
         setEditForm({});
     };
@@ -238,280 +232,233 @@ const DataSculptor = () => {
         setEditForm({});
     };
 
-    /* ================= Export Word ================= */
-    const handleExportWord = async () => {
-        if (!blocks.length) {
-            alert("Aucune donnée à exporter");
-            return;
-        }
-
-        try {
-            const { Document, Packer, Paragraph, HeadingLevel } = window.docx;
-            const children = [
-                new Paragraph({ text:"Data Sculptor – KPIs", heading:HeadingLevel.TITLE }),
-                new Paragraph({ text:`Exporté le ${new Date().toLocaleString('fr-FR')}` })
-            ];
-
-            blocks.forEach(b => {
-                const value = calculateKPI(b);
-                children.push(new Paragraph({ text:b.title, heading:HeadingLevel.HEADING_2 }));
-
-                if (b.type === "list") {
-                    if (value.length === 0) {
-                        children.push(new Paragraph({ text:"Aucune donnée" }));
-                    } else {
-                        value.forEach(([l,v]) =>
-                            children.push(new Paragraph({ text:`• ${l} : ${v}` }))
-                        );
-                    }
-                } else {
-                    children.push(new Paragraph({ text:String(value) }));
-                }
-            });
-
-            const doc = new Document({ sections:[{ children }] });
-            const blob = await Packer.toBlob(doc);
-
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = "data-sculptor-kpis.docx";
-            a.click();
-            
-            // Nettoyer l'URL créée
-            setTimeout(() => URL.revokeObjectURL(a.href), 100);
-        } catch (error) {
-            console.error("Erreur lors de l'export Word:", error);
-            alert("Erreur lors de l'export Word");
-        }
-    };
-
-    /* ================= Block ================= */
+    /* ================= Render Block ================= */
     const renderBlock = b => {
-        const active = activeId === b.id;
-        const value = calculateKPI(b);
+        const value = computeBlock(b);
+        const active = activeId===b.id;
 
         return (
-            <div
-                key={b.id}
-                draggable
-                onDragStart={(e) => onDragStart(e, b.id)}
-                onDragOver={onDragOver}
-                onDrop={(e) => onDrop(e, b.id)}
+            <div 
+                key={b.id} 
+                draggable 
+                onDragStart={e=>onDragStart(e,b.id)} 
+                onDragOver={onDragOver} 
+                onDrop={e=>onDrop(e,b.id)}
                 onDragEnd={onDragEnd}
-                onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveId(b.id);
-                }}
-                onContextMenu={e => { 
-                    e.preventDefault(); 
-                    e.stopPropagation();
-                    setActiveId(b.id); 
-                }}
-                className={`block-container relative bg-white p-6 rounded-lg border cursor-move transition
-                    ${active ? "ring-2 ring-blue-400 shadow-lg" : "hover:shadow-md"}`}
-            >
+                onClick={e=>{ e.stopPropagation(); setActiveId(b.id); }}
+                className={`block-container bg-white p-5 rounded-lg border relative cursor-move transition
+                    ${active?"ring-2 ring-blue-400 shadow-lg":"hover:shadow-md"}`}>
+                
                 {active && (
-                    <div 
-                        className="absolute inset-0 bg-white/70 flex items-center justify-center gap-4 z-10"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <button 
-                            className="bg-blue-500 text-white px-4 py-2 rounded-lg flex gap-2"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                handleEditBlock(b);
-                            }}
-                        >
+                    <div className="absolute inset-0 bg-white/70 flex items-center justify-center gap-4 z-10"
+                         onClick={e=>e.stopPropagation()}>
+                        <button className="bg-blue-500 text-white px-4 py-2 rounded-lg flex gap-2"
+                                onClick={e => handleEditClick(e, b)}>
                             <Edit/> Modifier
                         </button>
-                        <button
-                            onClick={e => {
-                                e.stopPropagation();
-                                setBlocks(blocks.filter(x => x.id !== b.id));
-                                setActiveId(null);
-                            }}
-                            className="bg-red-500 text-white px-4 py-2 rounded-lg flex gap-2"
-                        >
+                        <button className="bg-red-500 text-white px-4 py-2 rounded-lg flex gap-2"
+                                onClick={e=>{ 
+                                    e.stopPropagation(); 
+                                    setBlocks(blocks.filter(x=>x.id!==b.id)); 
+                                    setActiveId(null); 
+                                }}>
                             <Trash/> Supprimer
                         </button>
                     </div>
                 )}
 
-                <div className={active ? "opacity-30" : ""}>
+                <div className={active?"opacity-30":""}>
                     <div className="text-sm text-gray-500 mb-2">{b.title}</div>
-
-                    {b.type === "number" && (
-                        <div className="text-3xl font-bold">{value}</div>
+                    
+                    {b.type==="number" && (
+                        <div className="text-3xl font-bold">{value !== null ? value : 0}</div>
                     )}
-
-                    {b.type === "list" && b.chart && (
-                        <ChartBlock value={value} chart={b.chart}/>
+                    
+                    {b.type==="chart" && value && value.labels && value.labels.length > 0 && (
+                        <ChartBlock {...value} chart={b.chart}/>
                     )}
-
-                    {b.type === "list" && !b.chart && (
-                        <div className="space-y-1">
-                            {value.length === 0 ? (
-                                <div className="text-gray-400">Aucune donnée</div>
-                            ) : (
-                                value.map(([label, count]) => (
-                                    <div key={label} className="text-sm">
-                                        {label}: {count}
-                                    </div>
-                                ))
-                            )}
+                    
+                    {b.type==="chart" && value && value.labels && value.labels.length === 0 && (
+                        <div className="text-gray-400 text-center py-4">Aucune donnée à afficher</div>
+                    )}
+                    
+                    {b.type==="pivot" && value && Object.keys(value).length > 0 && (
+                        <div className="overflow-auto max-h-64">
+                            <table className="w-full text-sm border">
+                                <thead>
+                                    <tr>
+                                        <th className="border px-2 bg-gray-50"></th>
+                                        {Object.keys(Object.values(value)[0] || {}).map(c=>
+                                            <th key={c} className="border px-2 bg-gray-50">{c}</th>
+                                        )}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {Object.entries(value).map(([r,cols])=>(
+                                        <tr key={r}>
+                                            <td className="border px-2 font-medium bg-gray-50">{r}</td>
+                                            {Object.values(cols).map((v,i)=>
+                                                <td key={i} className="border px-2 text-center">{v}</td>
+                                            )}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
+                    )}
+                    
+                    {b.type==="pivot" && value && Object.keys(value).length === 0 && (
+                        <div className="text-gray-400 text-center py-4">Aucune donnée à afficher</div>
                     )}
                 </div>
             </div>
         );
     };
 
+    /* ================= Export Word ================= */
+    const handleExportWord = async () => {
+        if (!blocks.length) { 
+            alert("Aucune donnée à exporter"); 
+            return; 
+        }
+        
+        try {
+            const { Document, Packer, Paragraph, HeadingLevel } = window.docx;
+            const children=[
+                new Paragraph({text:"Data Sculptor – KPIs",heading:HeadingLevel.TITLE}),
+                new Paragraph({text:`Exporté le ${new Date().toLocaleString('fr-FR')}`})
+            ];
+            
+            blocks.forEach(b=>{
+                const val = computeBlock(b);
+                children.push(new Paragraph({text:b.title,heading:HeadingLevel.HEADING_2}));
+                
+                if (b.type==="number") {
+                    children.push(new Paragraph({text:String(val !== null ? val : 0)}));
+                }
+                
+                if (b.type==="chart") {
+                    if (val && val.labels && val.labels.length > 0) {
+                        val.labels.forEach((label, i) => {
+                            children.push(new Paragraph({text:`${label}: ${val.values[i]}`}));
+                        });
+                    } else {
+                        children.push(new Paragraph({text:"Aucune donnée"}));
+                    }
+                }
+                
+                if (b.type==="pivot") {
+                    if (val && Object.keys(val).length > 0) {
+                        Object.entries(val).forEach(([r,cols])=>{
+                            const line = [r,...Object.entries(cols).map(([k,v])=>`${k}:${v}`)].join(" | ");
+                            children.push(new Paragraph({text:line}));
+                        });
+                    } else {
+                        children.push(new Paragraph({text:"Aucune donnée"}));
+                    }
+                }
+            });
+            
+            const doc = new Document({sections:[{children}]});
+            const blob = await Packer.toBlob(doc);
+            const a=document.createElement("a");
+            a.href=URL.createObjectURL(blob);
+            a.download="data-sculptor.docx";
+            a.click();
+            setTimeout(()=>URL.revokeObjectURL(a.href),100);
+        } catch(e) { 
+            console.error("Erreur export:", e); 
+            alert("Erreur lors de l'export Word"); 
+        }
+    };
+
     return (
         <div className="p-8 max-w-7xl mx-auto">
             <h1 className="text-3xl font-bold mb-4">Data Sculptor</h1>
 
-            {/* Edit Modal */}
-            {editingId && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div 
-                        className="edit-modal bg-white rounded-lg p-6 max-w-md w-full mx-4"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <h2 className="text-xl font-bold mb-4">Modifier le module</h2>
-                        
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Titre</label>
-                                <input
-                                    type="text"
-                                    value={editForm.title}
-                                    onChange={(e) => setEditForm({...editForm, title: e.target.value})}
-                                    className="w-full border rounded px-3 py-2"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Type</label>
-                                <select
-                                    value={editForm.type}
-                                    onChange={(e) => setEditForm({...editForm, type: e.target.value})}
-                                    className="w-full border rounded px-3 py-2"
-                                >
-                                    <option value="number">Nombre</option>
-                                    <option value="list">Liste</option>
-                                </select>
-                            </div>
-
-                            {editForm.operation !== "count" && (
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">Colonne</label>
-                                    <select
-                                        value={editForm.column}
-                                        onChange={(e) => setEditForm({...editForm, column: e.target.value})}
-                                        className="w-full border rounded px-3 py-2"
-                                    >
-                                        {columns.map(col => (
-                                            <option key={col} value={col}>{col}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            )}
-
-                            <div>
-                                <label className="block text-sm font-medium mb-1">Opération</label>
-                                <select
-                                    value={editForm.operation}
-                                    onChange={(e) => setEditForm({...editForm, operation: e.target.value})}
-                                    className="w-full border rounded px-3 py-2"
-                                >
-                                    <option value="count">Compter</option>
-                                    {editForm.type === "number" && (
-                                        <>
-                                            <option value="sum">Somme</option>
-                                            <option value="avg">Moyenne</option>
-                                            <option value="max">Maximum</option>
-                                            <option value="min">Minimum</option>
-                                        </>
-                                    )}
-                                </select>
-                            </div>
-
-                            {editForm.type === "list" && (
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">Graphique</label>
-                                    <select
-                                        value={editForm.chart}
-                                        onChange={(e) => setEditForm({...editForm, chart: e.target.value})}
-                                        className="w-full border rounded px-3 py-2"
-                                    >
-                                        <option value="">Aucun</option>
-                                        <option value="bar">Barres</option>
-                                        <option value="pie">Camembert</option>
-                                        <option value="doughnut">Donut</option>
-                                    </select>
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="flex gap-3 mt-6">
-                            <button
-                                onClick={handleSaveEdit}
-                                className="flex-1 bg-blue-500 text-white px-4 py-2 rounded-lg"
-                            >
-                                Enregistrer
-                            </button>
-                            <button
-                                onClick={handleCancelEdit}
-                                className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-lg"
-                            >
-                                Annuler
-                            </button>
-                        </div>
+            {/* FILE PREVIEW */}
+            {data.length>0 && (
+                <div className="mb-8 bg-white border rounded-lg p-4 overflow-auto max-h-64">
+                    <div className="text-sm text-gray-500 mb-2">
+                        {data.length} ligne{data.length > 1 ? 's' : ''} chargée{data.length > 1 ? 's' : ''}
                     </div>
+                    <table className="text-sm w-full">
+                        <thead>
+                            <tr className="bg-gray-50">
+                                {columns.map(c=><th key={c} className="px-2 py-1 border text-left">{c}</th>)}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {data.slice(0,20).map((r,i)=>(
+                                <tr key={i} className="hover:bg-gray-50">
+                                    {columns.map(c=><td key={c} className="px-2 py-1 border">{r[c]}</td>)}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {data.length > 20 && (
+                        <div className="text-sm text-gray-400 mt-2">
+                            ... et {data.length - 20} ligne{data.length - 20 > 1 ? 's' : ''} de plus
+                        </div>
+                    )}
                 </div>
             )}
 
-            <div className="flex gap-3 mb-6">
-                <button
-                    onClick={() => fileInput.current?.click()}
-                    className="bg-blue-500 text-white px-4 py-2 rounded-lg flex items-center gap-2"
-                >
-                    <Upload/> Upload fichier
+            {/* ACTIONS */}
+            <div className="flex gap-3 mb-6 flex-wrap">
+                <button 
+                    onClick={()=>fileInput.current?.click()} 
+                    className="bg-blue-500 text-white px-4 py-2 rounded flex gap-2 items-center hover:bg-blue-600">
+                    <Upload/> Upload
                 </button>
-                <input 
-                    ref={fileInput} 
-                    type="file" 
-                    accept=".xlsx,.xls,.csv"
-                    hidden 
-                    onChange={handleFileUpload}
-                />
+                <input ref={fileInput} type="file" accept=".xlsx,.xls,.csv" hidden onChange={handleFileUpload}/>
 
-                <button
-                    onClick={handleAddBlock}
+                <button 
+                    onClick={()=>addBlock("number")} 
                     disabled={!columns.length}
-                    className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                    className={`px-4 py-2 rounded flex gap-2 items-center ${
                         columns.length 
                             ? "bg-indigo-500 text-white hover:bg-indigo-600" 
                             : "bg-gray-300 text-gray-500 cursor-not-allowed"
-                    }`}
-                >
-                    <Plus/> Ajouter une data
+                    }`}>
+                    <Plus/> KPI
+                </button>
+                
+                <button 
+                    onClick={()=>addBlock("chart")} 
+                    disabled={!columns.length}
+                    className={`px-4 py-2 rounded flex gap-2 items-center ${
+                        columns.length 
+                            ? "bg-emerald-500 text-white hover:bg-emerald-600" 
+                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                    }`}>
+                    <Plus/> Graph
+                </button>
+                
+                <button 
+                    onClick={()=>addBlock("pivot")} 
+                    disabled={!columns.length}
+                    className={`px-4 py-2 rounded flex gap-2 items-center ${
+                        columns.length 
+                            ? "bg-orange-500 text-white hover:bg-orange-600" 
+                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                    }`}>
+                    <Plus/> Pivot
                 </button>
 
-                <button
-                    onClick={handleExportWord}
+                <button 
+                    onClick={handleExportWord} 
                     disabled={!blocks.length}
-                    className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                    className={`px-4 py-2 rounded flex gap-2 items-center ${
                         blocks.length 
                             ? "bg-gray-900 text-white hover:bg-gray-800" 
                             : "bg-gray-300 text-gray-500 cursor-not-allowed"
-                    }`}
-                >
+                    }`}>
                     📄 Télécharger Word
                 </button>
             </div>
 
-            {blocks.length === 0 && data.length === 0 && (
+            {blocks.length===0 && data.length===0 && (
                 <div className="text-center text-gray-400 py-12">
                     Chargez un fichier Excel pour commencer
                 </div>
@@ -520,6 +467,137 @@ const DataSculptor = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {blocks.map(renderBlock)}
             </div>
+
+            {/* EDIT MODAL */}
+            {editingId && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+                     onClick={handleCancelEdit}>
+                    <div className="edit-modal bg-white rounded-lg p-6 max-w-md w-full mx-4" onClick={e=>e.stopPropagation()}>
+                        <h2 className="text-xl font-bold mb-4">Modifier le bloc</h2>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Titre</label>
+                                <input 
+                                    type="text" 
+                                    value={editForm.title} 
+                                    onChange={e=>setEditForm({...editForm,title:e.target.value})} 
+                                    className="w-full border rounded px-3 py-2"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Type</label>
+                                <select 
+                                    value={editForm.type} 
+                                    onChange={e=>setEditForm({...editForm,type:e.target.value})} 
+                                    className="w-full border rounded px-3 py-2">
+                                    <option value="number">KPI</option>
+                                    <option value="chart">Graph</option>
+                                    <option value="pivot">Pivot</option>
+                                </select>
+                            </div>
+
+                            {editForm.type==="number" && (
+                                <>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Colonne</label>
+                                        <select 
+                                            value={editForm.column || columns[0]} 
+                                            onChange={e=>setEditForm({...editForm,column:e.target.value})} 
+                                            className="w-full border rounded px-3 py-2">
+                                            {columns.map(c=><option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Opération</label>
+                                        <select 
+                                            value={editForm.operation} 
+                                            onChange={e=>setEditForm({...editForm,operation:e.target.value})} 
+                                            className="w-full border rounded px-3 py-2">
+                                            <option value="count">Compter</option>
+                                            <option value="sum">Somme</option>
+                                            <option value="avg">Moyenne</option>
+                                            <option value="max">Maximum</option>
+                                            <option value="min">Minimum</option>
+                                        </select>
+                                    </div>
+                                </>
+                            )}
+
+                            {editForm.type==="chart" && (
+                                <>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Colonne catégorie (X)</label>
+                                        <select 
+                                            value={editForm.group || columns[0]} 
+                                            onChange={e=>setEditForm({...editForm,group:e.target.value})} 
+                                            className="w-full border rounded px-3 py-2">
+                                            {columns.map(c=><option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Colonne valeur (Y)</label>
+                                        <select 
+                                            value={editForm.value || columns[0]} 
+                                            onChange={e=>setEditForm({...editForm,value:e.target.value})} 
+                                            className="w-full border rounded px-3 py-2">
+                                            {columns.map(c=><option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Type de graphique</label>
+                                        <select 
+                                            value={editForm.chart || "bar"} 
+                                            onChange={e=>setEditForm({...editForm,chart:e.target.value})} 
+                                            className="w-full border rounded px-3 py-2">
+                                            <option value="bar">Barres</option>
+                                            <option value="pie">Camembert</option>
+                                            <option value="doughnut">Donut</option>
+                                            <option value="line">Ligne</option>
+                                        </select>
+                                    </div>
+                                </>
+                            )}
+
+                            {editForm.type==="pivot" && (
+                                <>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Lignes</label>
+                                        <select 
+                                            value={editForm.row || columns[0]} 
+                                            onChange={e=>setEditForm({...editForm,row:e.target.value})} 
+                                            className="w-full border rounded px-3 py-2">
+                                            {columns.map(c=><option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">Colonnes</label>
+                                        <select 
+                                            value={editForm.col || columns[0]} 
+                                            onChange={e=>setEditForm({...editForm,col:e.target.value})} 
+                                            className="w-full border rounded px-3 py-2">
+                                            {columns.map(c=><option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        <div className="flex gap-3 mt-6">
+                            <button 
+                                className="flex-1 bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600" 
+                                onClick={handleSaveEdit}>
+                                Enregistrer
+                            </button>
+                            <button 
+                                className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-400" 
+                                onClick={handleCancelEdit}>
+                                Annuler
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
