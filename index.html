@@ -239,7 +239,8 @@ const DataSculptor = () => {
 
         return (
             <div 
-                key={b.id} 
+                key={b.id}
+                data-block-id={b.id}
                 draggable 
                 onDragStart={e=>onDragStart(e,b.id)} 
                 onDragOver={onDragOver} 
@@ -315,6 +316,70 @@ const DataSculptor = () => {
         );
     };
 
+    /* ================= Capture Block as Image ================= */
+    const captureBlockAsImage = async (blockId) => {
+        const blockElement = document.querySelector(`[data-block-id="${blockId}"]`);
+        if (!blockElement) return null;
+
+        try {
+            // Créer un canvas temporaire
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const rect = blockElement.getBoundingClientRect();
+            
+            // Définir les dimensions du canvas
+            canvas.width = rect.width * 2; // x2 pour meilleure qualité
+            canvas.height = rect.height * 2;
+            
+            // Fond blanc
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Pour les graphiques Chart.js, capturer directement le canvas
+            const chartCanvas = blockElement.querySelector('canvas');
+            if (chartCanvas) {
+                ctx.drawImage(chartCanvas, 0, 0, canvas.width, canvas.height);
+            } else {
+                // Pour les tableaux pivot, dessiner manuellement
+                const table = blockElement.querySelector('table');
+                if (table) {
+                    // Utiliser html2canvas-like approach manuel
+                    ctx.scale(2, 2);
+                    ctx.font = '12px Arial';
+                    ctx.fillStyle = '#000000';
+                    
+                    const rows = table.querySelectorAll('tr');
+                    let y = 10;
+                    rows.forEach(row => {
+                        const cells = row.querySelectorAll('th, td');
+                        let x = 10;
+                        cells.forEach(cell => {
+                            const text = cell.textContent;
+                            const isHeader = cell.tagName === 'TH';
+                            
+                            // Fond pour headers
+                            if (isHeader) {
+                                ctx.fillStyle = '#f9fafb';
+                                ctx.fillRect(x, y - 10, 100, 20);
+                                ctx.fillStyle = '#000000';
+                            }
+                            
+                            ctx.fillText(text, x + 5, y + 5);
+                            x += 110;
+                        });
+                        y += 25;
+                    });
+                }
+            }
+            
+            // Convertir en base64
+            return canvas.toDataURL('image/png').split(',')[1];
+        } catch (error) {
+            console.error('Erreur capture image:', error);
+            return null;
+        }
+    };
+
     /* ================= Export Word ================= */
     const handleExportWord = async () => {
         if (!blocks.length) { 
@@ -323,41 +388,44 @@ const DataSculptor = () => {
         }
         
         try {
-            const { Document, Packer, Paragraph, HeadingLevel } = window.docx;
+            const { Document, Packer, Paragraph, HeadingLevel, ImageRun } = window.docx;
             const children=[
                 new Paragraph({text:"Data Sculptor – KPIs",heading:HeadingLevel.TITLE}),
-                new Paragraph({text:`Exporté le ${new Date().toLocaleString('fr-FR')}`})
+                new Paragraph({text:`Exporté le ${new Date().toLocaleString('fr-FR')}`}),
+                new Paragraph({text:""}) // Ligne vide
             ];
             
-            blocks.forEach(b=>{
+            for (const b of blocks) {
                 const val = computeBlock(b);
                 children.push(new Paragraph({text:b.title,heading:HeadingLevel.HEADING_2}));
                 
                 if (b.type==="number") {
                     children.push(new Paragraph({text:String(val !== null ? val : 0)}));
+                    children.push(new Paragraph({text:""})); // Ligne vide
                 }
                 
-                if (b.type==="chart") {
-                    if (val && val.labels && val.labels.length > 0) {
-                        val.labels.forEach((label, i) => {
-                            children.push(new Paragraph({text:`${label}: ${val.values[i]}`}));
-                        });
+                if (b.type==="chart" || b.type==="pivot") {
+                    // Capturer l'image du bloc
+                    const imageData = await captureBlockAsImage(b.id);
+                    
+                    if (imageData) {
+                        children.push(new Paragraph({
+                            children: [
+                                new ImageRun({
+                                    data: Uint8Array.from(atob(imageData), c => c.charCodeAt(0)),
+                                    transformation: {
+                                        width: 500,
+                                        height: 300
+                                    }
+                                })
+                            ]
+                        }));
                     } else {
-                        children.push(new Paragraph({text:"Aucune donnée"}));
+                        children.push(new Paragraph({text:"[Impossible de capturer l'image]"}));
                     }
+                    children.push(new Paragraph({text:""})); // Ligne vide
                 }
-                
-                if (b.type==="pivot") {
-                    if (val && Object.keys(val).length > 0) {
-                        Object.entries(val).forEach(([r,cols])=>{
-                            const line = [r,...Object.entries(cols).map(([k,v])=>`${k}:${v}`)].join(" | ");
-                            children.push(new Paragraph({text:line}));
-                        });
-                    } else {
-                        children.push(new Paragraph({text:"Aucune donnée"}));
-                    }
-                }
-            });
+            }
             
             const doc = new Document({sections:[{children}]});
             const blob = await Packer.toBlob(doc);
