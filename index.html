@@ -19,162 +19,319 @@
 <div id="root"></div>
 
 <script type="text/babel">
-const { useState, useRef, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 
-/* ---------- Icons ---------- */
+/* ================= Icons ================= */
 const Upload = () => <span>⬆️</span>;
-const Trash2 = () => <span>🗑️</span>;
-const Edit3 = () => <span>✏️</span>;
 const Plus = () => <span>➕</span>;
+const Trash = () => <span>🗑️</span>;
+const Edit = () => <span>✏️</span>;
 
-/* ---------- Chart ---------- */
-const ChartBlock = ({ data }) => {
+/* ================= Chart ================= */
+const ChartBlock = ({ value, chart }) => {
     const ref = useRef(null);
+    const chartInstance = useRef(null);
 
     useEffect(() => {
-        if (!ref.current) return;
+        if (!ref.current || !chart || !value || value.length === 0) return;
+        
+        // Détruire l'instance précédente si elle existe
+        if (chartInstance.current) {
+            chartInstance.current.destroy();
+        }
+
         const ctx = ref.current.getContext("2d");
 
-        const chart = new Chart(ctx, {
-            type: data.chart,
+        chartInstance.current = new Chart(ctx, {
+            type: chart,
             data: {
-                labels: data.value.map(v => v[0]),
+                labels: value.map(v => v[0]),
                 datasets: [{
-                    data: data.value.map(v => v[1]),
-                    backgroundColor: ["#3B82F6","#F97316","#10B981","#EF4444","#8B5CF6"]
+                    data: value.map(v => v[1]),
+                    backgroundColor: [
+                        "#3B82F6","#F97316","#10B981",
+                        "#EF4444","#8B5CF6","#F59E0B"
+                    ]
                 }]
             },
-            options:{ responsive:true, plugins:{ legend:{ display:false }}}
+            options: { responsive:true, plugins:{ legend:{ display:false }} }
         });
 
-        return () => chart.destroy();
-    }, [data]);
+        return () => {
+            if (chartInstance.current) {
+                chartInstance.current.destroy();
+            }
+        };
+    }, [value, chart]);
 
-    return <canvas ref={ref} height="150"></canvas>;
+    return <canvas ref={ref} height="160"></canvas>;
 };
 
-/* ---------- App ---------- */
+/* ================= App ================= */
 const DataSculptor = () => {
     const [data, setData] = useState([]);
     const [columns, setColumns] = useState([]);
     const [blocks, setBlocks] = useState([]);
-    const [activeBlockId, setActiveBlockId] = useState(null);
+    const [activeId, setActiveId] = useState(null);
     const [draggedId, setDraggedId] = useState(null);
 
     const fileInput = useRef(null);
 
+    /* -------- Close overlay on outside click -------- */
     useEffect(() => {
-        const close = () => setActiveBlockId(null);
+        const close = (e) => {
+            // Ne fermer que si le clic est en dehors d'un block
+            if (!e.target.closest('.block-container')) {
+                setActiveId(null);
+            }
+        };
         window.addEventListener("click", close);
         return () => window.removeEventListener("click", close);
     }, []);
 
-    /* ---------- KPI ---------- */
-    const calculateKPI = (b) => {
-        if (b.operation === "count") return data.length;
-        const values = data.map(r => r[b.column]).filter(v => v != null && v !== "");
+    /* ================= KPI CALC ================= */
+    const calculateKPI = (block) => {
+        if (!data.length) return block.type === "list" ? [] : 0;
 
-        if (b.type === "number") {
+        if (block.operation === "count") return data.length;
+
+        const values = data
+            .map(r => r[block.column])
+            .filter(v => v !== null && v !== undefined && v !== "");
+
+        if (block.type === "number") {
             const nums = values.map(Number).filter(n => !isNaN(n));
             if (!nums.length) return 0;
-            if (b.operation === "sum") return nums.reduce((a,b)=>a+b,0).toFixed(2);
-            if (b.operation === "avg") return (nums.reduce((a,b)=>a+b,0)/nums.length).toFixed(2);
+
+            if (block.operation === "sum") return nums.reduce((a,b)=>a+b,0).toFixed(2);
+            if (block.operation === "avg") return (nums.reduce((a,b)=>a+b,0)/nums.length).toFixed(2);
+            if (block.operation === "max") return Math.max(...nums).toFixed(2);
+            if (block.operation === "min") return Math.min(...nums).toFixed(2);
         }
 
-        if (b.type === "list") {
+        if (block.type === "list") {
             const counts = {};
-            values.forEach(v => counts[v] = (counts[v]||0)+1);
-            return Object.entries(counts).slice(0,10);
+            values.forEach(v => counts[v] = (counts[v] || 0) + 1);
+            return Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,10);
         }
+
         return 0;
     };
 
-    /* ---------- Upload ---------- */
+    /* ================= Upload ================= */
     const handleFileUpload = e => {
-        const f = e.target.files[0];
-        if (!f) return;
+        const file = e.target.files[0];
+        if (!file) return;
 
         const reader = new FileReader();
         reader.onload = ev => {
-            const wb = XLSX.read(new Uint8Array(ev.target.result), {type:"array"});
-            const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-            setData(json);
-            setColumns(Object.keys(json[0] || {}));
+            try {
+                const wb = XLSX.read(new Uint8Array(ev.target.result), { type:"array" });
+                const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+                if (!json.length) {
+                    alert("Le fichier ne contient pas de données");
+                    return;
+                }
+
+                setData(json);
+                setColumns(Object.keys(json[0]));
+
+                // KPIs de base
+                setBlocks([
+                    {
+                        id: Date.now(),
+                        title: "Nombre de lignes",
+                        type: "number",
+                        operation: "count"
+                    }
+                ]);
+            } catch (error) {
+                console.error("Erreur lors de la lecture du fichier:", error);
+                alert("Erreur lors de la lecture du fichier");
+            }
         };
-        reader.readAsArrayBuffer(f);
+        reader.onerror = () => {
+            alert("Erreur lors de la lecture du fichier");
+        };
+        reader.readAsArrayBuffer(file);
+        
+        // Réinitialiser l'input pour permettre de charger le même fichier
+        e.target.value = '';
     };
 
-    /* ---------- Add block ---------- */
+    /* ================= Add Block ================= */
     const handleAddBlock = () => {
-        const newBlock = {
-            id: Date.now(),
-            title: "Nouvelle data",
-            type: "number",
-            operation: "count",
-            value: data.length
-        };
-        setBlocks([...blocks, newBlock]);
+        if (!columns.length) {
+            alert("Veuillez d'abord charger un fichier");
+            return;
+        }
+
+        setBlocks(prev => [
+            ...prev,
+            {
+                id: Date.now(),
+                title: "Nouvelle data",
+                type: "number",
+                column: columns[0],
+                operation: "sum"
+            }
+        ]);
     };
 
-    /* ---------- Drag & drop ---------- */
-    const onDrop = (targetId) => {
-        const srcIndex = blocks.findIndex(b => b.id === draggedId);
-        const tgtIndex = blocks.findIndex(b => b.id === targetId);
-        if (srcIndex === -1 || tgtIndex === -1) return;
+    /* ================= Drag & Drop ================= */
+    const onDragStart = (e, id) => {
+        setDraggedId(id);
+        e.dataTransfer.effectAllowed = "move";
+    };
+
+    const onDragOver = (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+    };
+
+    const onDrop = (e, targetId) => {
+        e.preventDefault();
+        if (draggedId === targetId) return;
+        
+        const from = blocks.findIndex(b => b.id === draggedId);
+        const to = blocks.findIndex(b => b.id === targetId);
+        if (from === -1 || to === -1) return;
 
         const updated = [...blocks];
-        const [moved] = updated.splice(srcIndex, 1);
-        updated.splice(tgtIndex, 0, moved);
+        const [moved] = updated.splice(from, 1);
+        updated.splice(to, 0, moved);
         setBlocks(updated);
+        setDraggedId(null);
     };
 
-    /* ---------- Export Word ---------- */
+    const onDragEnd = () => {
+        setDraggedId(null);
+    };
+
+    /* ================= Export Word ================= */
     const handleExportWord = async () => {
-        const { Document, Packer, Paragraph, HeadingLevel } = window.docx;
-        const children = [
-            new Paragraph({ text:"Data Sculptor – KPIs", heading:HeadingLevel.TITLE })
-        ];
+        if (!blocks.length) {
+            alert("Aucune donnée à exporter");
+            return;
+        }
 
-        blocks.forEach(b => {
-            children.push(new Paragraph({ text:b.title, heading:HeadingLevel.HEADING_2 }));
-            children.push(new Paragraph({ text:String(b.value) }));
-        });
+        try {
+            const { Document, Packer, Paragraph, HeadingLevel } = window.docx;
+            const children = [
+                new Paragraph({ text:"Data Sculptor – KPIs", heading:HeadingLevel.TITLE }),
+                new Paragraph({ text:`Exporté le ${new Date().toLocaleString('fr-FR')}` })
+            ];
 
-        const doc = new Document({ sections:[{ children }] });
-        const blob = await Packer.toBlob(doc);
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = "kpis.docx";
-        a.click();
+            blocks.forEach(b => {
+                const value = calculateKPI(b);
+                children.push(new Paragraph({ text:b.title, heading:HeadingLevel.HEADING_2 }));
+
+                if (b.type === "list") {
+                    if (value.length === 0) {
+                        children.push(new Paragraph({ text:"Aucune donnée" }));
+                    } else {
+                        value.forEach(([l,v]) =>
+                            children.push(new Paragraph({ text:`• ${l} : ${v}` }))
+                        );
+                    }
+                } else {
+                    children.push(new Paragraph({ text:String(value) }));
+                }
+            });
+
+            const doc = new Document({ sections:[{ children }] });
+            const blob = await Packer.toBlob(doc);
+
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = "data-sculptor-kpis.docx";
+            a.click();
+            
+            // Nettoyer l'URL créée
+            setTimeout(() => URL.revokeObjectURL(a.href), 100);
+        } catch (error) {
+            console.error("Erreur lors de l'export Word:", error);
+            alert("Erreur lors de l'export Word");
+        }
     };
 
-    /* ---------- Block ---------- */
+    /* ================= Block ================= */
     const renderBlock = b => {
-        const active = activeBlockId === b.id;
+        const active = activeId === b.id;
+        const value = calculateKPI(b);
 
         return (
             <div
                 key={b.id}
                 draggable
-                onDragStart={() => setDraggedId(b.id)}
-                onDragOver={e => e.preventDefault()}
-                onDrop={() => onDrop(b.id)}
-                onClick={() => setActiveBlockId(b.id)}
-                onContextMenu={e => { e.preventDefault(); setActiveBlockId(b.id); }}
-                className={`relative bg-white p-6 rounded-lg border cursor-move transition
+                onDragStart={(e) => onDragStart(e, b.id)}
+                onDragOver={onDragOver}
+                onDrop={(e) => onDrop(e, b.id)}
+                onDragEnd={onDragEnd}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveId(b.id);
+                }}
+                onContextMenu={e => { 
+                    e.preventDefault(); 
+                    e.stopPropagation();
+                    setActiveId(b.id); 
+                }}
+                className={`block-container relative bg-white p-6 rounded-lg border cursor-move transition
                     ${active ? "ring-2 ring-blue-400 shadow-lg" : "hover:shadow-md"}`}
             >
                 {active && (
-                    <div className="absolute inset-0 bg-white/70 flex items-center justify-center gap-4 z-10">
-                        <button className="bg-blue-500 text-white px-3 py-2 rounded-lg"><Edit3/> Modifier</button>
-                        <button onClick={()=>setBlocks(blocks.filter(x=>x.id!==b.id))}
-                            className="bg-red-500 text-white px-3 py-2 rounded-lg"><Trash2/> Supprimer</button>
+                    <div 
+                        className="absolute inset-0 bg-white/70 flex items-center justify-center gap-4 z-10"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <button 
+                            className="bg-blue-500 text-white px-4 py-2 rounded-lg flex gap-2"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                // Fonctionnalité de modification à implémenter
+                                alert("Fonctionnalité de modification à venir");
+                            }}
+                        >
+                            <Edit/> Modifier
+                        </button>
+                        <button
+                            onClick={e => {
+                                e.stopPropagation();
+                                setBlocks(blocks.filter(x => x.id !== b.id));
+                                setActiveId(null);
+                            }}
+                            className="bg-red-500 text-white px-4 py-2 rounded-lg flex gap-2"
+                        >
+                            <Trash/> Supprimer
+                        </button>
                     </div>
                 )}
 
                 <div className={active ? "opacity-30" : ""}>
                     <div className="text-sm text-gray-500 mb-2">{b.title}</div>
-                    <div className="text-3xl font-bold">{b.value}</div>
+
+                    {b.type === "number" && (
+                        <div className="text-3xl font-bold">{value}</div>
+                    )}
+
+                    {b.type === "list" && b.chart && (
+                        <ChartBlock value={value} chart={b.chart}/>
+                    )}
+
+                    {b.type === "list" && !b.chart && (
+                        <div className="space-y-1">
+                            {value.length === 0 ? (
+                                <div className="text-gray-400">Aucune donnée</div>
+                            ) : (
+                                value.map(([label, count]) => (
+                                    <div key={label} className="text-sm">
+                                        {label}: {count}
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
         );
@@ -185,17 +342,50 @@ const DataSculptor = () => {
             <h1 className="text-3xl font-bold mb-4">Data Sculptor</h1>
 
             <div className="flex gap-3 mb-6">
-                <button onClick={()=>fileInput.current.click()} className="bg-blue-500 text-white px-4 py-2 rounded-lg">
+                <button
+                    onClick={() => fileInput.current?.click()}
+                    className="bg-blue-500 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+                >
                     <Upload/> Upload fichier
                 </button>
-                <input ref={fileInput} type="file" hidden onChange={handleFileUpload}/>
-                <button onClick={handleAddBlock} className="bg-indigo-500 text-white px-4 py-2 rounded-lg">
+                <input 
+                    ref={fileInput} 
+                    type="file" 
+                    accept=".xlsx,.xls,.csv"
+                    hidden 
+                    onChange={handleFileUpload}
+                />
+
+                <button
+                    onClick={handleAddBlock}
+                    disabled={!columns.length}
+                    className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                        columns.length 
+                            ? "bg-indigo-500 text-white hover:bg-indigo-600" 
+                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                    }`}
+                >
                     <Plus/> Ajouter une data
                 </button>
-                <button onClick={handleExportWord} className="bg-gray-900 text-white px-4 py-2 rounded-lg">
-                    📄 Word
+
+                <button
+                    onClick={handleExportWord}
+                    disabled={!blocks.length}
+                    className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                        blocks.length 
+                            ? "bg-gray-900 text-white hover:bg-gray-800" 
+                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                    }`}
+                >
+                    📄 Télécharger Word
                 </button>
             </div>
+
+            {blocks.length === 0 && data.length === 0 && (
+                <div className="text-center text-gray-400 py-12">
+                    Chargez un fichier Excel pour commencer
+                </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {blocks.map(renderBlock)}
